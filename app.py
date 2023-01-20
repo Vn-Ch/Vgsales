@@ -14,7 +14,8 @@ sheet_name = 'vgsales'
 
 df= pd.read_excel(excel_file,sheet_name=sheet_name,usecols='A:K',
                 header=0)
-
+app = dash.Dash(__name__)
+server = app.server
 st.dataframe(df)
 
 bar_chart = px.bar(df,title='North America Sales',
