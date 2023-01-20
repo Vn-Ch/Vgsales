@@ -1,52 +1,98 @@
-import pandas as pd
-import streamlit as st
-import plotly.express as px
-from PIL import Image
+import argparse
+import os
+import platform
+from pathlib import Path
 
-st.set_page_config(page_title='VGsales')
-st.header('VG Sales across world')
-st.subheader('Is the Dashboard clear')
+from xlib import appargs as lib_appargs
+from xlib import os as lib_os
 
-## - Load dataframe
+# onnxruntime==1.8.0 requires CUDA_PATH_V11_2, but 1.8.1 don't
+# keep the code if they return that behaviour
+# if __name__ == '__main__':
+#     if platform.system() == 'Windows':
+#         if 'CUDA_PATH' not in os.environ:
+#             raise Exception('CUDA_PATH should be set to environ')
+#         # set environ for onnxruntime
+#         # os.environ['CUDA_PATH_V11_2'] = os.environ['CUDA_PATH']
 
-excel_file= 'vgsales.xlsm'
-sheet_name = 'vgsales'
+def main():
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers()
 
-df= pd.read_excel(excel_file,sheet_name=sheet_name,usecols='A:K',
-                header=0)
-app = dash.Dash(__name__)
-server = app.server
-st.dataframe(df)
+    run_parser = subparsers.add_parser( "run", help="Run the application.")
+    run_subparsers = run_parser.add_subparsers()
 
-bar_chart = px.bar(df,title='North America Sales',
-                   x='Year', y='North American Sales')
+    def run_DeepFaceLive(args):
+        userdata_path = Path(args.userdata_dir)
+        lib_appargs.set_arg_bool('NO_CUDA', args.no_cuda)
 
-st.plotly_chart(bar_chart)
+        print('Running DeepFaceLive.')
+        from apps.DeepFaceLive.DeepFaceLiveApp import DeepFaceLiveApp
+        DeepFaceLiveApp(userdata_path=userdata_path).run()
 
-Genre = df['Genre'].unique().tolist()
-Year = df['Year'].unique().tolist()
+    p = run_subparsers.add_parser('DeepFaceLive')
+    p.add_argument('--userdata-dir', default=None, action=fixPathAction, help="Workspace directory.")
+    p.add_argument('--no-cuda', action="store_true", default=False, help="Disable CUDA.")
+    p.set_defaults(func=run_DeepFaceLive)
 
-year_selection = st.slider('Year:', min_value=min(Year),
-                           max_value=max(Year),
-                           value=(min(Year),max(Year)))
+    dev_parser = subparsers.add_parser("dev")
+    dev_subparsers = dev_parser.add_subparsers()
 
-genre_selection = st.multiselect('Genre:',
-                                 Genre,
-                                 default=Genre)
+    def run_split_large_files(args):
+        from scripts import dev
+        dev.split_large_files()
 
-mask = (df['Year'].between(*year_selection)) & (df['Genre'].isin(genre_selection))
-number_of_result = df[mask].shape[0]
-st.markdown(f'*Available Results: {number_of_result}*')
+    p = dev_subparsers.add_parser('split_large_files')
+    p.set_defaults(func=run_split_large_files)
 
-df_grouped = df[mask].groupby(by=['Platform']).count()[['Year']]
-df_grouped = df_grouped.rename(columns={'Year':'Period'})
-df_grouped = df_grouped.reset_index()
+    def run_merge_large_files(args):
+        from scripts import dev
+        dev.merge_large_files(delete_parts=args.delete_parts)
 
-bar_chart = px.bar(df_grouped,
-                   x='Platform',
-                   y='Period',
-                   text='Period',
-                   color_discrete_sequence=['#F63366']*len(df_grouped),
-                   template='plotly_white')
+    p = dev_subparsers.add_parser('merge_large_files')
+    p.add_argument('--delete-parts', action="store_true", default=False)
+    p.set_defaults(func=run_merge_large_files)
 
-st.plotly_chart(bar_chart)
+    def run_extract_FaceSynthetics(args):
+        from scripts import dev
+
+        inputdir_path = Path(args.input_dir)
+        faceset_path = Path(args.faceset_path)
+
+        dev.extract_FaceSynthetics(inputdir_path, faceset_path)
+
+    p = dev_subparsers.add_parser('extract_FaceSynthetics')
+    p.add_argument('--input-dir', default=None, action=fixPathAction, help="FaceSynthetics directory.")
+    p.add_argument('--faceset-path', default=None, action=fixPathAction, help="output .dfs path")
+    p.set_defaults(func=run_extract_FaceSynthetics)
+
+    train_parser = subparsers.add_parser( "train", help="Train neural network.")
+    train_parsers = train_parser.add_subparsers()
+
+    def train_FaceAligner(args):
+        lib_os.set_process_priority(lib_os.ProcessPriority.IDLE)
+        from apps.trainers.FaceAligner.FaceAlignerTrainerApp import FaceAlignerTrainerApp
+        FaceAlignerTrainerApp(workspace_path=Path(args.workspace_dir), faceset_path=Path(args.faceset_path))
+
+    p = train_parsers.add_parser('FaceAligner')
+    p.add_argument('--workspace-dir', default=None, action=fixPathAction, help="Workspace directory.")
+    p.add_argument('--faceset-path', default=None, action=fixPathAction, help=".dfs path")
+    p.set_defaults(func=train_FaceAligner)
+
+    def bad_args(arguments):
+        parser.print_help()
+        exit(0)
+    parser.set_defaults(func=bad_args)
+
+    args = parser.parse_args()
+    args.func(args)
+
+class fixPathAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, os.path.abspath(os.path.expanduser(values)))
+
+if __name__ == '__main__':
+    main()
+
+# import code
+# code.interact(local=dict(globals(), **locals()))
